@@ -3,10 +3,17 @@ from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 import chromadb
-from chromadb.config import Settings
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # === CONFIGURATION ===
-APPLICATION_FOLDER = "path/to/your/applications"  # <<<--- Update this
+APPLICATION_FOLDER = "/Users/roshinpv/Documents/Projects/wiremock"  # <<<--- Update this
 CHROMA_DB_DIR = "chromadb_store"
 COLLECTION_NAME = "application_index"
 
@@ -21,25 +28,21 @@ SPECIAL_FILENAMES = {"makefile", "dockerfile"}  # Case-insensitive
 BATCH_SIZE = 32  # Number of files to embed per batch for efficiency
 
 # === INIT CHROMADB AND EMBEDDINGS MODEL ===
-client = chromadb.Client(Settings(
-    persist_directory=CHROMA_DB_DIR,
-    chroma_db_impl="duckdb+parquet"
-))
+client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # === GET OR CREATE COLLECTION ===
-existing_collections = [col.name for col in client.list_collections()]
-if COLLECTION_NAME in existing_collections:
-    collection = client.get_collection(name=COLLECTION_NAME)
-else:
-    collection = client.create_collection(name=COLLECTION_NAME)
+collection = client.get_or_create_collection(
+    name=COLLECTION_NAME,
+    metadata={"hnsw:space": "cosine"}
+)
 
 # === READ FILE CONTENT ===
 def read_file(file_path: Path) -> str | None:
     try:
         return file_path.read_text(encoding="utf-8", errors="ignore")
     except Exception as e:
-        print(f"[WARN] Cannot read {file_path}: {e}")
+        logger.warning(f"Cannot read {file_path}: {e}")
         return None
 
 # === RECURSIVE FILE DISCOVERY ===
@@ -56,55 +59,51 @@ def discover_files(base_path: str) -> list[Path]:
 # === MAIN INDEXING FUNCTION ===
 def index_files():
     files = discover_files(APPLICATION_FOLDER)
-    print(f"[INFO] Found {len(files)} eligible files to index.")
+    logger.info(f"Found {len(files)} eligible files to index.")
 
-    existing_ids = set(collection.get(ids=None)["ids"])  # all current doc ids
+    # Get existing IDs from collection
+    try:
+        existing_ids = set(collection.get()["ids"])
+    except:
+        existing_ids = set()
 
-    new_documents, new_embeddings, new_ids, new_metadatas = [], [], [], []
-
-    doc_id = len(existing_ids)
+    new_documents, new_ids, new_metadatas = [], [], []
+    processed = 0
 
     for i in tqdm(range(0, len(files), BATCH_SIZE), desc="Indexing files"):
         batch = files[i:i + BATCH_SIZE]
-
-        texts = []
-        valid_paths = []
 
         for file_path in batch:
             content = read_file(file_path)
             if content and len(content.strip()) > 20:  # skip tiny or empty files
                 doc_identifier = f"doc_{hash(file_path)}"
                 if doc_identifier not in existing_ids:
-                    texts.append(content)
-                    valid_paths.append(file_path)
+                    new_documents.append(content)
+                    new_ids.append(doc_identifier)
+                    new_metadatas.append({"file_path": str(file_path)})
+                    processed += 1
 
-        if texts:
-            embeddings = model.encode(texts)
-            for content, emb, path in zip(texts, embeddings, valid_paths):
-                doc_identifier = f"doc_{hash(path)}"
-                new_documents.append(content)
-                new_embeddings.append(emb)
-                new_ids.append(doc_identifier)
-                new_metadatas.append({"file_path": str(path)})
+        if new_documents:
+            try:
+                collection.add(
+                    documents=new_documents,
+                    ids=new_ids,
+                    metadatas=new_metadatas
+                )
+                logger.info(f"Added batch of {len(new_documents)} documents")
+                new_documents.clear()
+                new_ids.clear()
+                new_metadatas.clear()
+            except Exception as e:
+                logger.error(f"Error adding documents: {e}")
 
-            collection.add(
-                documents=new_documents,
-                embeddings=new_embeddings,
-                ids=new_ids,
-                metadatas=new_metadatas
-            )
-
-            new_documents.clear()
-            new_embeddings.clear()
-            new_ids.clear()
-            new_metadatas.clear()
-
-    client.persist()
-    print("[DONE] Indexing complete and persisted to disk.")
+    logger.info(f"Indexing complete. Processed {processed} new files.")
 
 # === RUN MAIN ===
 if __name__ == "__main__":
     if not Path(APPLICATION_FOLDER).exists():
-        print(f"[ERROR] Application folder does not exist: {APPLICATION_FOLDER}")
+        logger.error(f"Application folder does not exist: {APPLICATION_FOLDER}")
     else:
+        logger.info("Starting indexing process...")
         index_files()
+        logger.info("Indexing completed successfully.")

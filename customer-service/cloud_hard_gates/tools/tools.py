@@ -3,6 +3,8 @@ import logging
 from tqdm import tqdm
 import chromadb
 from sentence_transformers import SentenceTransformer
+from typing import Dict, Any, List
+from chromadb.config import Settings
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -82,6 +84,74 @@ def index_files(file_list, collection, model):
             logging.error(f"Failed to index {rel_path}: {e}")
 
     logging.info(f"✅ Indexed {success_count} out of {len(file_list)} files successfully.")
+
+def search_application_context(query: str, collection_name: str = "application_code") -> Dict[str, Any]:
+    """
+    Searches ChromaDB for application context based on user query.
+
+    Args:
+        query (str): The search query to find relevant code context.
+        collection_name (str): Name of the ChromaDB collection to search in.
+
+    Returns:
+        dict: Search results with relevant code context.
+
+    Example:
+        >>> search_application_context("error handling implementation")
+        {
+            'status': 'success',
+            'results': [
+                {
+                    'file_path': 'src/error_handler.py',
+                    'code_snippet': 'def handle_error(error): ...',
+                    'relevance_score': 0.85
+                }
+            ]
+        }
+    """
+    logger.info("Searching application context for query: %s", query)
+    
+    try:
+        # Initialize ChromaDB client with new configuration
+        client = chromadb.PersistentClient(path="./chroma_db")
+        
+        # Get or create the collection
+        collection = client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
+        
+        # Search the collection
+        results = collection.query(
+            query_texts=[query],
+            n_results=5  # Return top 5 most relevant results
+        )
+        
+        # Format results
+        formatted_results = []
+        for i, (doc, metadata, distance) in enumerate(zip(
+            results['documents'][0],
+            results['metadatas'][0],
+            results['distances'][0]
+        )):
+            formatted_results.append({
+                'file_path': metadata.get('file_path', 'unknown'),
+                'code_snippet': doc,
+                'relevance_score': 1 - distance  # Convert distance to similarity score
+            })
+        
+        return {
+            'status': 'success',
+            'results': formatted_results
+        }
+        
+    except Exception as e:
+        logger.error("Error searching application context: %s", str(e))
+        return {
+            'status': 'error',
+            'error': str(e),
+            'results': []
+        }
 
 if __name__ == "__main__":
     logging.info("🔍 Starting code indexing script...")
