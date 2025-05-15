@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 APPLICATION_FOLDER = "/Users/roshinpv/Documents/Projects/wiremock"  # <<<--- Update this
 CHROMA_DB_DIR = "chromadb_store"
 COLLECTION_NAME = "application_index"
+MODEL_NAME = "all-MiniLM-L6-v2"
+MODEL_CACHE_DIR = "./sentence_transformer_models"  # Local directory to store the model
 
 ALLOWED_EXTENSIONS = {
     ".py", ".java", ".js", ".ts", ".html", ".css", ".cpp", ".c", ".cs",
@@ -29,7 +31,15 @@ BATCH_SIZE = 32  # Number of files to embed per batch for efficiency
 
 # === INIT CHROMADB AND EMBEDDINGS MODEL ===
 client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
-model = SentenceTransformer("all-MiniLM-L6-v2")
+
+# Load model from local cache if available, otherwise download
+if not os.path.exists(MODEL_CACHE_DIR):
+    os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
+    logger.info(f"Created model cache directory: {MODEL_CACHE_DIR}")
+
+logger.info(f"Loading model {MODEL_NAME} (this may download it first time)")
+model = SentenceTransformer(MODEL_NAME, cache_folder=MODEL_CACHE_DIR)
+logger.info(f"Model loaded successfully")
 
 # === GET OR CREATE COLLECTION ===
 collection = client.get_or_create_collection(
@@ -64,40 +74,63 @@ def index_files():
     # Get existing IDs from collection
     try:
         existing_ids = set(collection.get()["ids"])
-    except:
+        logger.info(f"Found {len(existing_ids)} existing documents in collection")
+    except Exception as e:
+        logger.warning(f"Error getting existing IDs: {e}")
         existing_ids = set()
 
-    new_documents, new_ids, new_metadatas = [], [], []
+    texts_batch = []
+    file_paths_batch = []
     processed = 0
+    total_added = 0
 
-    for i in tqdm(range(0, len(files), BATCH_SIZE), desc="Indexing files"):
+    for i in tqdm(range(0, len(files), BATCH_SIZE), desc="Processing files"):
         batch = files[i:i + BATCH_SIZE]
-
+        
         for file_path in batch:
             content = read_file(file_path)
             if content and len(content.strip()) > 20:  # skip tiny or empty files
                 doc_identifier = f"doc_{hash(file_path)}"
                 if doc_identifier not in existing_ids:
-                    new_documents.append(content)
-                    new_ids.append(doc_identifier)
-                    new_metadatas.append({"file_path": str(file_path)})
-                    processed += 1
-
-        if new_documents:
+                    texts_batch.append(content)
+                    file_paths_batch.append(file_path)
+            
+            processed += 1
+        
+        if texts_batch:
             try:
+                # Generate embeddings for batch
+                embeddings = model.encode(texts_batch, show_progress_bar=False)
+                
+                # Add documents with embeddings to collection
+                documents = []
+                ids = []
+                metadatas = []
+                
+                for content, file_path, embedding in zip(texts_batch, file_paths_batch, embeddings):
+                    doc_identifier = f"doc_{hash(file_path)}"
+                    documents.append(content)
+                    ids.append(doc_identifier)
+                    metadatas.append({"file_path": str(file_path)})
+                
                 collection.add(
-                    documents=new_documents,
-                    ids=new_ids,
-                    metadatas=new_metadatas
+                    documents=documents,
+                    embeddings=embeddings.tolist(),
+                    ids=ids,
+                    metadatas=metadatas
                 )
-                logger.info(f"Added batch of {len(new_documents)} documents")
-                new_documents.clear()
-                new_ids.clear()
-                new_metadatas.clear()
+                
+                total_added += len(texts_batch)
+                logger.info(f"Added batch of {len(texts_batch)} documents")
+                
+                # Clear batch
+                texts_batch.clear()
+                file_paths_batch.clear()
+                
             except Exception as e:
-                logger.error(f"Error adding documents: {e}")
-
-    logger.info(f"Indexing complete. Processed {processed} new files.")
+                logger.error(f"Error processing batch: {e}")
+    
+    logger.info(f"Indexing complete. Processed {processed} files, added {total_added} new documents.")
 
 # === RUN MAIN ===
 if __name__ == "__main__":
