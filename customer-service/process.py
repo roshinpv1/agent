@@ -13,6 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # === CONFIGURATION ===
+
 APPLICATION_FOLDER = "/Users/roshinpv/Documents/Projects/wiremock"  # <<<--- Update this
 CHROMA_DB_DIR = "chromadb_store"
 COLLECTION_NAME = "application_index"
