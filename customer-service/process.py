@@ -17,7 +17,8 @@ APPLICATION_FOLDER = "/Users/roshinpv/Documents/Projects/wiremock"  # <<<--- Upd
 CHROMA_DB_DIR = "chromadb_store"
 COLLECTION_NAME = "application_index"
 MODEL_NAME = "all-MiniLM-L6-v2"
-MODEL_CACHE_DIR = "./sentence_transformer_models"  # Local directory to store the model
+# Point this to your existing local model directory
+LOCAL_MODEL_DIR = "/Users/roshinpv/.cache/torch/sentence_transformers"  # Update this to your local model path
 
 ALLOWED_EXTENSIONS = {
     ".py", ".java", ".js", ".ts", ".html", ".css", ".cpp", ".c", ".cs",
@@ -32,13 +33,15 @@ BATCH_SIZE = 32  # Number of files to embed per batch for efficiency
 # === INIT CHROMADB AND EMBEDDINGS MODEL ===
 client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
 
-# Load model from local cache if available, otherwise download
-if not os.path.exists(MODEL_CACHE_DIR):
-    os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
-    logger.info(f"Created model cache directory: {MODEL_CACHE_DIR}")
-
-logger.info(f"Loading model {MODEL_NAME} (this may download it first time)")
-model = SentenceTransformer(MODEL_NAME, cache_folder=MODEL_CACHE_DIR)
+# Use the locally downloaded model
+logger.info(f"Loading model {MODEL_NAME} from local directory")
+model_path = os.path.join(LOCAL_MODEL_DIR, MODEL_NAME)
+if not os.path.exists(model_path):
+    logger.warning(f"Model not found at {model_path}, defaulting to download")
+    model = SentenceTransformer(MODEL_NAME)
+else:
+    logger.info(f"Using existing model at {model_path}")
+    model = SentenceTransformer(model_path)
 logger.info(f"Model loaded successfully")
 
 # === GET OR CREATE COLLECTION ===
