@@ -1,3 +1,10 @@
 /.venv
 /chromadb_store
 /customer-service/chromadb_store
+/backend/__pycache__
+/backend/code/__pycache__
+/backend/code/utils/__pycache__
+/customer-service 23-49-01-248/chromadb_store
+/customer-service 23-49-01-248/cloud_hard_gates/__pycache__
+/customer-service 23-49-01-248/cloud_hard_gates
+/customer-service/cloud_hard_gates/__pycache__
